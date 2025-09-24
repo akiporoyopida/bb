@@ -47,6 +47,16 @@ python3 b.py < blocks.json
 python3 b.py --file blocks.json
 ```
 
+# 実行例
+ccusage blocks --live --json | python3 claude_code_viewer.py --current
+
+# アクティブな場合の出力例
+● opus-4      $ 16.79       6,779,420/ 58,679,737    [ 11.6%] → 74.3% ($109.38) リセット: 15:00 (3h24m) [62エントリー]
+    バーンレート: 183,414 tokens/分, $27.25/時間
+
+# 非アクティブな場合の出力例  
+○ opus-4      $  0.00               0/ 58,679,737    [  0.0%] リセット: 15:00 (3h24m) [0エントリー]
+
 ### 現在のセッション情報
 
 ```bash
