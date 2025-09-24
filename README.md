@@ -15,8 +15,8 @@ Claude Code の使用実績をターミナルで視覚的に表示するPython�
 
 ```bash
 # リポジトリをクローン
-git clone https://github.com/yourusername/claude-code-viewer.git
-cd claude-code-viewer
+git clone https://github.com/akiporoyopida/bb.git
+cd bb
 
 # 実行権限を付与
 chmod +x bb.py
@@ -201,14 +201,6 @@ export TERM=xterm-256color
 ## ライセンス
 
 MIT License
-
-## 貢献
-
-プルリクエストを歓迎します。大きな変更の場合は、まずissueを作成して変更内容について議論してください。
-
-## 作者
-
-Your Name (@yourusername)
 
 ## 関連プロジェクト
 
