@@ -19,12 +19,12 @@ git clone https://github.com/akiporoyopida/bb.git
 cd bb
 
 # 実行権限を付与
-chmod +x bb.py
+chmod +x b.py
 
 # オプション: PATHに追加
-cp bb.py ~/bin/
+cp b.py ~/bin/
 # または
-sudo cp bb.py /usr/local/bin/
+sudo cp b.py /usr/local/bin/
 ```
 
 ## 必要な環境
@@ -38,20 +38,20 @@ sudo cp bb.py /usr/local/bin/
 
 ```bash
 # ccusageから直接パイプで入力
-ccusage blocks --json | python3 bb.py
+ccusage blocks --json | python3 b.py
 
 # JSONファイルから読み込み
-python3 bb.py < blocks.json
+python3 b.py < blocks.json
 
 # ファイルを指定
-python3 bb.py --file blocks.json
+python3 b.py --file blocks.json
 ```
 
 ### 現在のセッション情報
 
 ```bash
 # 現在の使用状況を1行で表示
-ccusage blocks --json | python3 bb.py --current
+ccusage blocks --json | python3 b.py --current
 
 # 出力例:
 # opus-4      $ 45.67      23,456,789/ 58,679,737    [ 40.0%] リセット: 15:00 (2h35m) [3セッション]
@@ -61,46 +61,46 @@ ccusage blocks --json | python3 bb.py --current
 
 ```bash
 # 高使用日のみ表示（5時間以上）
-ccusage blocks --json | python3 bb.py --high-usage
+ccusage blocks --json | python3 b.py --high-usage
 
 # 高コスト日のみ表示（$50以上）
-ccusage blocks --json | python3 bb.py --high-cost
+ccusage blocks --json | python3 b.py --high-cost
 ```
 
 ### ソートと表示制限
 
 ```bash
 # コスト順で上位10日を表示
-ccusage blocks --json | python3 bb.py --sort-cost --limit 10
+ccusage blocks --json | python3 b.py --sort-cost --limit 10
 
 # 使用時間順で上位5日を表示
-ccusage blocks --json | python3 bb.py --sort-duration --limit 5
+ccusage blocks --json | python3 b.py --sort-duration --limit 5
 ```
 
 ### 詳細情報
 
 ```bash
 # 特定日の詳細を表示
-ccusage blocks --json | python3 bb.py --date 2025-09-13
+ccusage blocks --json | python3 b.py --date 2025-09-13
 
 # モデル別の統計を表示
-ccusage blocks --json | python3 bb.py --model-summary
+ccusage blocks --json | python3 b.py --model-summary
 
 # 統計情報のみ表示
-ccusage blocks --json | python3 bb.py --summary
+ccusage blocks --json | python3 b.py --summary
 ```
 
 ### その他のオプション
 
 ```bash
 # カラー表示を無効化（パイプやファイル出力用）
-ccusage blocks --json | python3 bb.py --no-color > report.txt
+ccusage blocks --json | python3 b.py --no-color > report.txt
 
 # 凡例を非表示
-ccusage blocks --json | python3 bb.py --no-legend
+ccusage blocks --json | python3 b.py --no-legend
 
 # ヘルプを表示
-python3 bb.py -h
+python3 b.py -h
 ```
 
 ## タイムラインの見方
@@ -127,7 +127,7 @@ python3 bb.py -h
 
 ### 日別タイムライン表示
 ```bash
-$ ccusage blocks --json | python3 bb.py
+$ ccusage blocks --json | python3 b.py
 
 ==================================================================================================
 Claude Code 使用実績タイムライン
@@ -161,7 +161,7 @@ Claude Code 使用実績タイムライン
 
 ### 現在の使用状況
 ```bash
-$ ccusage blocks --json | python3 bb.py --current
+$ ccusage blocks --json | python3 b.py --current
 opus-4      $127.27      58,679,737/ 58,679,737    [100.0%] リセット: 05:00 (1h15m) [1セッション]
 ```
 
@@ -171,7 +171,7 @@ opus-4      $127.27      58,679,737/ 58,679,737    [100.0%] リセット: 05:00 
 
 ```bash
 # ~/.zshrc または ~/.bashrc に追加
-alias ccv='ccusage blocks --json | python3 ~/path/to/bb.py'
+alias ccv='ccusage blocks --json | python3 ~/path/to/b.py'
 alias ccv-current='ccv --current'
 alias ccv-cost='ccv --sort-cost --limit 10'
 alias ccv-today='ccv --date $(date +%Y-%m-%d)'
