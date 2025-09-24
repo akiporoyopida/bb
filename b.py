@@ -120,6 +120,12 @@ class ClaudeCodeViewer:
                 duration_minutes=duration_minutes
             )
             
+            # projectionとburnRateを保持
+            if 'projection' in block_data and block_data['projection']:
+                block.projection = block_data['projection']
+            if 'burnRate' in block_data and block_data['burnRate']:
+                block.burn_rate = block_data['burnRate']
+            
             self.blocks.append(block)
         
         # 日付ごとにグループ化
@@ -391,6 +397,13 @@ class ClaudeCodeViewer:
         # 現在時刻を取得
         now = datetime.datetime.now()
         
+        # アクティブなブロックを探す
+        active_block = None
+        for block in self.blocks:
+            if block.is_active:
+                active_block = block
+                break
+        
         # 現在の5時間ブロックを計算
         current_hour = now.hour
         block_start_hour = (current_hour // 5) * 5
@@ -401,45 +414,116 @@ class ClaudeCodeViewer:
         if block_end_hour >= 24:
             reset_time += datetime.timedelta(days=1)
         
-        # 現在のブロック内のセッションを取得
-        current_block_sessions = []
-        block_start_time = now.replace(hour=block_start_hour, minute=0, second=0, microsecond=0)
-        
-        for block in self.blocks:
-            block_time = datetime.datetime.strptime(block.start_time, '%Y-%m-%d %H:%M')
-            if block_time >= block_start_time and block_time < reset_time:
-                current_block_sessions.append(block)
-        
-        # 統計を計算
-        total_tokens = sum(b.total_tokens for b in current_block_sessions)
-        total_cost = sum(b.cost_usd for b in current_block_sessions)
-        
-        # 主要モデルを取得
-        model_counts = {}
-        for block in current_block_sessions:
-            for model in block.models:
-                model_counts[model] = model_counts.get(model, 0) + 1
-        
-        primary_model = max(model_counts.items(), key=lambda x: x[1])[0] if model_counts else "N/A"
-        
-        # 使用率を計算
-        usage_percent = (total_tokens / MAX_TOKENS_5H * 100) if MAX_TOKENS_5H > 0 else 0
-        
-        # 残り時間を計算
-        time_remaining = reset_time - now
-        hours_remaining = int(time_remaining.total_seconds() // 3600)
-        minutes_remaining = int((time_remaining.total_seconds() % 3600) // 60)
-        
-        return {
-            'model': primary_model,
-            'total_cost': total_cost,
-            'total_tokens': total_tokens,
-            'max_tokens': MAX_TOKENS_5H,
-            'usage_percent': usage_percent,
-            'reset_time': reset_time.strftime('%H:%M'),
-            'time_remaining': f"{hours_remaining}h{minutes_remaining}m",
-            'session_count': len(current_block_sessions)
-        }
+        if active_block:
+            # アクティブなブロックがある場合
+            total_tokens = active_block.total_tokens
+            total_cost = active_block.cost_usd
+            
+            # プロジェクションが利用可能な場合は使用
+            if hasattr(active_block, 'projection') and active_block.projection:
+                projected_tokens = active_block.projection.get('totalTokens', total_tokens)
+                projected_cost = active_block.projection.get('totalCost', total_cost)
+            else:
+                projected_tokens = total_tokens
+                projected_cost = total_cost
+            
+            # 主要モデルを取得
+            primary_model = active_block.models[0] if active_block.models else "N/A"
+            if 'opus' in primary_model:
+                primary_model = 'opus-4'
+            elif 'sonnet' in primary_model:
+                primary_model = 'sonnet-4'
+            elif 'synthetic' in primary_model:
+                primary_model = 'synthetic'
+            
+            # 使用率を計算
+            usage_percent = (total_tokens / MAX_TOKENS_5H * 100) if MAX_TOKENS_5H > 0 else 0
+            projected_percent = (projected_tokens / MAX_TOKENS_5H * 100) if MAX_TOKENS_5H > 0 else 0
+            
+            # 残り時間を計算
+            if hasattr(active_block, 'projection') and active_block.projection:
+                remaining_minutes = active_block.projection.get('remainingMinutes', 0)
+                hours_remaining = remaining_minutes // 60
+                minutes_remaining = remaining_minutes % 60
+            else:
+                time_remaining = reset_time - now
+                hours_remaining = int(time_remaining.total_seconds() // 3600)
+                minutes_remaining = int((time_remaining.total_seconds() % 3600) // 60)
+            
+            # バーンレート情報
+            burn_rate = None
+            if hasattr(active_block, 'burn_rate') and active_block.burn_rate:
+                burn_rate = {
+                    'tokens_per_minute': active_block.burn_rate.get('tokensPerMinute', 0),
+                    'cost_per_hour': active_block.burn_rate.get('costPerHour', 0)
+                }
+            
+            return {
+                'model': primary_model,
+                'total_cost': total_cost,
+                'total_tokens': total_tokens,
+                'projected_tokens': projected_tokens,
+                'projected_cost': projected_cost,
+                'max_tokens': MAX_TOKENS_5H,
+                'usage_percent': usage_percent,
+                'projected_percent': projected_percent,
+                'reset_time': reset_time.strftime('%H:%M'),
+                'time_remaining': f"{hours_remaining}h{minutes_remaining}m",
+                'entries': active_block.entries,
+                'is_active': True,
+                'current_hour_block': f"{block_start_hour:02d}:00-{block_end_hour:02d}:00",
+                'burn_rate': burn_rate
+            }
+        else:
+            # アクティブなブロックがない場合は、現在の時間枠内のブロックを探す
+            current_block_sessions = []
+            block_start_time = now.replace(hour=block_start_hour, minute=0, second=0, microsecond=0)
+            today = now.strftime('%Y-%m-%d')
+            
+            for block in self.blocks:
+                block_date, block_time_str = block.start_time.split(' ')
+                block_hour = int(block_time_str.split(':')[0])
+                
+                if block_date == today and block_start_hour <= block_hour < block_end_hour:
+                    current_block_sessions.append(block)
+            
+            # 統計を計算
+            total_tokens = sum(b.total_tokens for b in current_block_sessions)
+            total_cost = sum(b.cost_usd for b in current_block_sessions)
+            total_entries = sum(b.entries for b in current_block_sessions)
+            
+            # 主要モデルを取得
+            model_counts = {}
+            for block in current_block_sessions:
+                for model in block.models:
+                    model_counts[model] = model_counts.get(model, 0) + 1
+            
+            primary_model = max(model_counts.items(), key=lambda x: x[1])[0] if model_counts else "N/A"
+            
+            # 使用率を計算
+            usage_percent = (total_tokens / MAX_TOKENS_5H * 100) if MAX_TOKENS_5H > 0 else 0
+            
+            # 残り時間を計算
+            time_remaining = reset_time - now
+            hours_remaining = int(time_remaining.total_seconds() // 3600)
+            minutes_remaining = int((time_remaining.total_seconds() % 3600) // 60)
+            
+            return {
+                'model': primary_model,
+                'total_cost': total_cost,
+                'total_tokens': total_tokens,
+                'projected_tokens': total_tokens,
+                'projected_cost': total_cost,
+                'max_tokens': MAX_TOKENS_5H,
+                'usage_percent': usage_percent,
+                'projected_percent': usage_percent,
+                'reset_time': reset_time.strftime('%H:%M'),
+                'time_remaining': f"{hours_remaining}h{minutes_remaining}m",
+                'entries': total_entries,
+                'is_active': False,
+                'current_hour_block': f"{block_start_hour:02d}:00-{block_end_hour:02d}:00",
+                'burn_rate': None
+            }
 
     def print_current_session_line(self):
         """現在のセッション情報を1行で表示"""
@@ -453,14 +537,40 @@ class ClaudeCodeViewer:
         else:
             usage_color = self.COLORS['GREEN']
         
-        # 1行表示
-        print(f"{self.COLORS['BOLD']}{info['model']:<10}{self.COLORS['ENDC']} "
-              f"${info['total_cost']:>6.2f} "
-              f"{self._format_number(info['total_tokens']):>12}/{self._format_number(info['max_tokens']):<12} "
-              f"{usage_color}[{info['usage_percent']:>5.1f}%]{self.COLORS['ENDC']} "
-              f"リセット: {self.COLORS['CYAN']}{info['reset_time']}{self.COLORS['ENDC']} "
-              f"({info['time_remaining']}) "
-              f"{self.COLORS['GRAY']}[{info['session_count']}セッション]{self.COLORS['ENDC']}")
+        # 予測使用率の色
+        if info['projected_percent'] >= 80:
+            proj_color = self.COLORS['RED']
+        elif info['projected_percent'] >= 50:
+            proj_color = self.COLORS['YELLOW']
+        else:
+            proj_color = self.COLORS['GREEN']
+        
+        # アクティブ状態の表示
+        active_indicator = f"{self.COLORS['GREEN']}●{self.COLORS['ENDC']}" if info['is_active'] else f"{self.COLORS['GRAY']}○{self.COLORS['ENDC']}"
+        
+        # 基本情報の1行表示
+        output = f"{active_indicator} {self.COLORS['BOLD']}{info['model']:<10}{self.COLORS['ENDC']} "
+        output += f"${info['total_cost']:>6.2f} "
+        output += f"{self._format_number(info['total_tokens']):>12}/{self._format_number(info['max_tokens']):<12} "
+        output += f"{usage_color}[{info['usage_percent']:>5.1f}%]{self.COLORS['ENDC']} "
+        
+        # アクティブな場合は予測値も表示
+        if info['is_active'] and info['projected_tokens'] != info['total_tokens']:
+            output += f"→ {proj_color}{info['projected_percent']:>5.1f}%{self.COLORS['ENDC']} "
+            output += f"(${info['projected_cost']:.2f}) "
+        
+        output += f"リセット: {self.COLORS['CYAN']}{info['reset_time']}{self.COLORS['ENDC']} "
+        output += f"({info['time_remaining']}) "
+        output += f"{self.COLORS['GRAY']}[{info['entries']}エントリー]{self.COLORS['ENDC']}"
+        
+        # バーンレート情報がある場合は2行目に表示
+        if info['is_active'] and info['burn_rate']:
+            output += f"\n{self.COLORS['GRAY']}    "
+            output += f"バーンレート: {info['burn_rate']['tokens_per_minute']:,.0f} tokens/分, "
+            output += f"${info['burn_rate']['cost_per_hour']:.2f}/時間"
+            output += f"{self.COLORS['ENDC']}"
+        
+        print(output)
 
 def main():
     parser = argparse.ArgumentParser(
