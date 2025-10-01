@@ -15,6 +15,7 @@ import json
 import sys
 import datetime
 import argparse
+import re
 from dataclasses import dataclass
 from typing import List, Dict, Optional
 import locale
@@ -44,6 +45,7 @@ class ClaudeCodeViewer:
         self.blocks = []
         self.daily_data = {}
         self.no_color = no_color
+        self.unknown_models = set()  # 未知のモデル名を収集
         
         # ターミナルカラー
         if no_color:
@@ -70,11 +72,56 @@ class ClaudeCodeViewer:
         self.BAR_CHARS = {
             'opus': '█',
             'sonnet': '▓',
+            'haiku': '▪',
             'mixed': '▒',
             'synthetic': '░',
+            'unknown': '◆',
             'empty': '·',
             'hour_mark': '│',
         }
+
+    def _simplify_model_name(self, model: str) -> str:
+        """モデル名を簡略化（新規モデル自動対応）
+        例: claude-sonnet-4-5-20250929 -> sonnet-4.5
+        """
+        model_lower = model.lower()
+
+        # syntheticの特殊処理
+        if 'synthetic' in model_lower:
+            return 'synthetic'
+
+        # モデルファミリーを検出 (sonnet, opus, haiku など)
+        families = ['sonnet', 'opus', 'haiku']
+        detected_family = None
+        for family in families:
+            if family in model_lower:
+                detected_family = family
+                break
+
+        if not detected_family:
+            # 未知のモデルファミリー：そのまま返す（収集）
+            self.unknown_models.add(model)
+            return model
+
+        # バージョン番号を抽出 (例: 4-5, 4.5, 3-5, 3.5)
+        # パターン: family-X-Y または family-X.Y
+        version_pattern = rf'{detected_family}[-_]?(\d+)[-._](\d+)'
+        match = re.search(version_pattern, model_lower)
+
+        if match:
+            major, minor = match.groups()
+            return f'{detected_family}-{major}.{minor}'
+
+        # バージョンが見つからない場合は単一数字を探す (例: opus-4)
+        single_version_pattern = rf'{detected_family}[-_]?(\d+)'
+        match = re.search(single_version_pattern, model_lower)
+
+        if match:
+            major = match.group(1)
+            return f'{detected_family}-{major}.0'
+
+        # バージョン情報がない場合はファミリー名のみ
+        return detected_family
 
     def load_from_json(self, json_data: Dict):
         """JSONデータからブロックを読み込み"""
@@ -94,17 +141,11 @@ class ClaudeCodeViewer:
             
             duration_minutes = int((end_time - start_time).total_seconds() / 60)
             
-            # モデル名を簡略化
+            # モデル名を解析（バージョン区別、新規モデル対応）
             models = []
             for model in block_data['models']:
-                if 'opus' in model:
-                    models.append('opus-4')
-                elif 'sonnet' in model:
-                    models.append('sonnet-4')
-                elif 'synthetic' in model:
-                    models.append('synthetic')
-                else:
-                    models.append(model)
+                simplified = self._simplify_model_name(model)
+                models.append(simplified)
             
             block = Block(
                 id=block_data['id'],
@@ -167,44 +208,86 @@ class ClaudeCodeViewer:
         """数値をカンマ区切りで表示"""
         return f"{num:,}"
 
+    def _get_model_color(self, model: str) -> str:
+        """モデルに応じた色コードを取得"""
+        if 'sonnet-4.5' in model:
+            return self.COLORS['CYAN']
+        elif 'sonnet-4.0' in model:
+            return self.COLORS['BLUE']
+        elif 'sonnet-3.5' in model:
+            return self.COLORS['MAGENTA']
+        elif 'sonnet' in model:
+            return self.COLORS['BLUE']
+        elif 'opus-4' in model:
+            return self.COLORS['RED']
+        elif 'opus-3' in model:
+            return self.COLORS['YELLOW']
+        elif 'opus' in model:
+            return self.COLORS['RED']
+        elif 'haiku-4' in model:
+            return self.COLORS['GREEN']
+        elif 'haiku-3' in model:
+            return self.COLORS['GREEN']
+        elif 'haiku' in model:
+            return self.COLORS['GREEN']
+        elif 'synthetic' in model:
+            return self.COLORS['GRAY']
+        else:
+            return self.COLORS['WHITE']
+
     def _get_timeline_bar(self, blocks: List[Block], width: int = 48) -> str:
-        """24時間のタイムラインバーを生成"""
+        """24時間のタイムラインバーを生成（色分け対応）"""
         # 48文字で24時間を表現（1文字 = 30分）
-        timeline = [self.BAR_CHARS['empty']] * width
-        
+        # タプル形式で保存: (文字, 色コード)
+        timeline = [(self.BAR_CHARS['empty'], '')] * width
+
         for block in blocks:
             # 開始時刻を解析
             time_parts = block.start_time.split(' ')[1].split(':')
             hour = int(time_parts[0])
             minute = int(time_parts[1])
-            
+
             start_pos = int((hour * 60 + minute) / 30)  # 30分単位
             duration_blocks = max(1, int(block.duration_minutes / 30))
-            
-            # モデルに応じてバーの文字を決定
+
+            # モデルに応じてバーの文字と色を決定
             if len(block.models) > 1:
                 bar_char = self.BAR_CHARS['mixed']
+                color = self.COLORS['YELLOW']
             elif 'synthetic' in block.models[0]:
                 bar_char = self.BAR_CHARS['synthetic']
+                color = self._get_model_color(block.models[0])
             elif 'sonnet' in block.models[0]:
                 bar_char = self.BAR_CHARS['sonnet']
-            else:
+                color = self._get_model_color(block.models[0])
+            elif 'haiku' in block.models[0]:
+                bar_char = self.BAR_CHARS['haiku']
+                color = self._get_model_color(block.models[0])
+            elif 'opus' in block.models[0]:
                 bar_char = self.BAR_CHARS['opus']
-            
+                color = self._get_model_color(block.models[0])
+            else:
+                bar_char = self.BAR_CHARS['unknown']
+                color = self._get_model_color(block.models[0])
+
             # タイムラインに配置
+            timeline_list = list(timeline)
             for i in range(min(duration_blocks, width - start_pos)):
                 if start_pos + i < width:
-                    timeline[start_pos + i] = bar_char
-        
-        # 6時間ごとのマーカーを追加
-        timeline_str = ''.join(timeline)
+                    timeline_list[start_pos + i] = (bar_char, color)
+            timeline = tuple(timeline_list)
+
+        # 6時間ごとのマーカーを追加（色付き）
         marked_timeline = ''
-        for i, char in enumerate(timeline_str):
+        for i, (char, color) in enumerate(timeline):
             if i % 12 == 0:  # 6時間ごと
                 marked_timeline += self.COLORS['GRAY'] + '|' + self.COLORS['ENDC']
             else:
-                marked_timeline += char
-        
+                if color:
+                    marked_timeline += color + char + self.COLORS['ENDC']
+                else:
+                    marked_timeline += char
+
         return marked_timeline
 
     def _get_cost_color(self, cost: float) -> str:
@@ -253,12 +336,25 @@ class ClaudeCodeViewer:
             print(f"  1日平均コスト: {self.COLORS['YELLOW']}${(total_cost/len(self.daily_data)):.2f}{self.COLORS['ENDC']}\n")
 
     def print_legend(self):
-        """凡例を表示"""
+        """凡例を表示（色分け対応）"""
         print(f"{self.COLORS['BOLD']}凡例:{self.COLORS['ENDC']}")
-        print(f"  {self.BAR_CHARS['opus']} = Opus-4")
-        print(f"  {self.BAR_CHARS['sonnet']} = Sonnet-4")
-        print(f"  {self.BAR_CHARS['synthetic']} = Synthetic")
-        print(f"  {self.BAR_CHARS['mixed']} = 複数モデル使用")
+        print(f"  {self.COLORS['RED']}{self.BAR_CHARS['opus']}{self.COLORS['ENDC']} = Opus (赤系)")
+        print(f"    {self.COLORS['RED']}{self.BAR_CHARS['opus']}{self.COLORS['ENDC']} Opus-4.x")
+        print(f"    {self.COLORS['YELLOW']}{self.BAR_CHARS['opus']}{self.COLORS['ENDC']} Opus-3.x")
+        print(f"  {self.COLORS['CYAN']}{self.BAR_CHARS['sonnet']}{self.COLORS['ENDC']} = Sonnet (青/シアン系)")
+        print(f"    {self.COLORS['CYAN']}{self.BAR_CHARS['sonnet']}{self.COLORS['ENDC']} Sonnet-4.5")
+        print(f"    {self.COLORS['BLUE']}{self.BAR_CHARS['sonnet']}{self.COLORS['ENDC']} Sonnet-4.0")
+        print(f"    {self.COLORS['MAGENTA']}{self.BAR_CHARS['sonnet']}{self.COLORS['ENDC']} Sonnet-3.5")
+        print(f"  {self.COLORS['GREEN']}{self.BAR_CHARS['haiku']}{self.COLORS['ENDC']} = Haiku (緑)")
+        print(f"  {self.COLORS['GRAY']}{self.BAR_CHARS['synthetic']}{self.COLORS['ENDC']} = Synthetic")
+        print(f"  {self.COLORS['YELLOW']}{self.BAR_CHARS['mixed']}{self.COLORS['ENDC']} = 複数モデル使用")
+
+        # 未知のモデルが存在する場合のみ表示
+        if self.unknown_models:
+            print(f"  {self.COLORS['WHITE']}{self.BAR_CHARS['unknown']}{self.COLORS['ENDC']} = 未知のモデル")
+            for unknown_model in sorted(self.unknown_models):
+                print(f"    {self.COLORS['WHITE']}{self.BAR_CHARS['unknown']}{self.COLORS['ENDC']} {unknown_model}")
+
         print(f"  {self.BAR_CHARS['empty']} = 使用なし")
         print(f"  {self.COLORS['GRAY']}|{self.COLORS['ENDC']} = 6時間マーカー (0, 6, 12, 18時)")
         print()
@@ -427,14 +523,8 @@ class ClaudeCodeViewer:
                 projected_tokens = total_tokens
                 projected_cost = total_cost
             
-            # 主要モデルを取得
+            # 主要モデルを取得（バージョン情報をそのまま使用）
             primary_model = active_block.models[0] if active_block.models else "N/A"
-            if 'opus' in primary_model:
-                primary_model = 'opus-4'
-            elif 'sonnet' in primary_model:
-                primary_model = 'sonnet-4'
-            elif 'synthetic' in primary_model:
-                primary_model = 'synthetic'
             
             # 使用率を計算
             usage_percent = (total_tokens / MAX_TOKENS_5H * 100) if MAX_TOKENS_5H > 0 else 0
