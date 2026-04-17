@@ -49,9 +49,11 @@ class ClaudeCodeViewer:
         
         # ターミナルカラー
         if no_color:
-            self.COLORS = {key: '' for key in ['HEADER', 'BLUE', 'GREEN', 'YELLOW', 
-                                                'RED', 'ENDC', 'BOLD', 'UNDERLINE', 
-                                                'CYAN', 'WHITE', 'GRAY', 'MAGENTA']}
+            self.COLORS = {key: '' for key in ['HEADER', 'BLUE', 'GREEN', 'YELLOW',
+                                                'RED', 'ENDC', 'BOLD', 'UNDERLINE',
+                                                'CYAN', 'WHITE', 'GRAY', 'MAGENTA',
+                                                'ORANGE', 'BRIGHT_GREEN', 'BRIGHT_RED',
+                                                'PINK', 'BRIGHT_CYAN']}
         else:
             self.COLORS = {
                 'HEADER': '\033[95m',
@@ -66,6 +68,11 @@ class ClaudeCodeViewer:
                 'WHITE': '\033[97m',
                 'GRAY': '\033[90m',
                 'MAGENTA': '\033[95m',
+                'ORANGE': '\033[38;5;208m',      # Opus 4.5用
+                'BRIGHT_RED': '\033[38;5;196m',  # Opus 4.6用
+                'BRIGHT_GREEN': '\033[38;5;118m', # Haiku 4.5用
+                'PINK': '\033[38;5;201m',        # Opus 4.7用
+                'BRIGHT_CYAN': '\033[38;5;51m',  # Sonnet 4.6用
             }
         
         # アスキーアートバー文字
@@ -126,18 +133,19 @@ class ClaudeCodeViewer:
     def load_from_json(self, json_data: Dict):
         """JSONデータからブロックを読み込み"""
         self.blocks = []
-        
+        JST = datetime.timezone(datetime.timedelta(hours=9))
+
         for block_data in json_data.get('blocks', []):
             if block_data['isGap']:
                 continue
-                
-            # 時間を解析
-            start_time = datetime.datetime.fromisoformat(block_data['startTime'].replace('Z', '+00:00'))
-            
+
+            # 時間を解析（UTC → JST変換）
+            start_time = datetime.datetime.fromisoformat(block_data['startTime'].replace('Z', '+00:00')).astimezone(JST)
+
             if block_data['actualEndTime']:
-                end_time = datetime.datetime.fromisoformat(block_data['actualEndTime'].replace('Z', '+00:00'))
+                end_time = datetime.datetime.fromisoformat(block_data['actualEndTime'].replace('Z', '+00:00')).astimezone(JST)
             else:
-                end_time = datetime.datetime.fromisoformat(block_data['endTime'].replace('Z', '+00:00'))
+                end_time = datetime.datetime.fromisoformat(block_data['endTime'].replace('Z', '+00:00')).astimezone(JST)
             
             duration_minutes = int((end_time - start_time).total_seconds() / 60)
             
@@ -173,30 +181,64 @@ class ClaudeCodeViewer:
         self._group_by_date()
 
     def _group_by_date(self):
-        """日付ごとにブロックをグループ化"""
+        """日付ごとにブロックをグループ化（日付またぎ対応）"""
         self.daily_data = {}
-        
+
         for block in self.blocks:
-            date_str = block.start_time.split(' ')[0]
-            
-            if date_str not in self.daily_data:
-                self.daily_data[date_str] = {
-                    'blocks': [],
-                    'total_duration': 0,
-                    'total_cost': 0,
-                    'total_tokens': 0,
-                    'total_entries': 0,
-                    'models': set()
-                }
-            
-            self.daily_data[date_str]['blocks'].append(block)
-            self.daily_data[date_str]['total_duration'] += block.duration_minutes
-            self.daily_data[date_str]['total_cost'] += block.cost_usd
-            self.daily_data[date_str]['total_tokens'] += block.total_tokens
-            self.daily_data[date_str]['total_entries'] += block.entries
-            
-            for model in block.models:
-                self.daily_data[date_str]['models'].add(model)
+            start_date = block.start_time.split(' ')[0]
+            end_date = block.end_time.split(' ')[0]
+
+            if start_date == end_date:
+                # 同一日 → そのまま追加
+                self._add_block_to_date(start_date, block)
+            else:
+                # 日付またぎ → 00:00で分割
+                from copy import copy
+
+                # Part 1: start_time ～ 23:59 (start_date)
+                st_parts = block.start_time.split(' ')[1].split(':')
+                start_minutes = int(st_parts[0]) * 60 + int(st_parts[1])
+                mins_until_midnight = 24 * 60 - start_minutes
+
+                et_parts = block.end_time.split(' ')[1].split(':')
+                mins_after_midnight = int(et_parts[0]) * 60 + int(et_parts[1])
+
+                total = block.duration_minutes or (mins_until_midnight + mins_after_midnight)
+                ratio1 = mins_until_midnight / total if total > 0 else 0.5
+
+                block1 = copy(block)
+                block1.end_time = f"{start_date} 23:59"
+                block1.duration_minutes = mins_until_midnight
+                block1.total_tokens = int(block.total_tokens * ratio1)
+                block1.cost_usd = block.cost_usd * ratio1
+                self._add_block_to_date(start_date, block1)
+
+                # Part 2: 00:00 ～ end_time (end_date)
+                block2 = copy(block)
+                block2.start_time = f"{end_date} 00:00"
+                block2.duration_minutes = mins_after_midnight
+                block2.total_tokens = block.total_tokens - block1.total_tokens
+                block2.cost_usd = block.cost_usd - block1.cost_usd
+                self._add_block_to_date(end_date, block2)
+
+    def _add_block_to_date(self, date_str, block):
+        """1ブロックを指定日のデータに追加"""
+        if date_str not in self.daily_data:
+            self.daily_data[date_str] = {
+                'blocks': [],
+                'total_duration': 0,
+                'total_cost': 0,
+                'total_tokens': 0,
+                'total_entries': 0,
+                'models': set()
+            }
+        self.daily_data[date_str]['blocks'].append(block)
+        self.daily_data[date_str]['total_duration'] += block.duration_minutes
+        self.daily_data[date_str]['total_cost'] += block.cost_usd
+        self.daily_data[date_str]['total_tokens'] += block.total_tokens
+        self.daily_data[date_str]['total_entries'] += block.entries
+        for model in block.models:
+            self.daily_data[date_str]['models'].add(model)
 
     def _get_weekday(self, date_str: str) -> str:
         """曜日を取得"""
@@ -210,7 +252,9 @@ class ClaudeCodeViewer:
 
     def _get_model_color(self, model: str) -> str:
         """モデルに応じた色コードを取得"""
-        if 'sonnet-4.5' in model:
+        if 'sonnet-4.6' in model:
+            return self.COLORS['BRIGHT_CYAN']
+        elif 'sonnet-4.5' in model:
             return self.COLORS['CYAN']
         elif 'sonnet-4.0' in model:
             return self.COLORS['BLUE']
@@ -218,12 +262,22 @@ class ClaudeCodeViewer:
             return self.COLORS['MAGENTA']
         elif 'sonnet' in model:
             return self.COLORS['BLUE']
+        elif 'opus-4.7' in model:
+            return self.COLORS['PINK']
+        elif 'opus-4.6' in model:
+            return self.COLORS['BRIGHT_RED']
+        elif 'opus-4.5' in model:
+            return self.COLORS['ORANGE']
+        elif 'opus-4.1' in model:
+            return self.COLORS['RED']
         elif 'opus-4' in model:
             return self.COLORS['RED']
         elif 'opus-3' in model:
             return self.COLORS['YELLOW']
         elif 'opus' in model:
             return self.COLORS['RED']
+        elif 'haiku-4.5' in model:
+            return self.COLORS['BRIGHT_GREEN']
         elif 'haiku-4' in model:
             return self.COLORS['GREEN']
         elif 'haiku-3' in model:
@@ -251,24 +305,34 @@ class ClaudeCodeViewer:
             duration_blocks = max(1, int(block.duration_minutes / 30))
 
             # モデルに応じてバーの文字と色を決定
-            if len(block.models) > 1:
-                bar_char = self.BAR_CHARS['mixed']
-                color = self.COLORS['YELLOW']
-            elif 'synthetic' in block.models[0]:
+            # syntheticを除いた実モデルで判定
+            real_models = [m for m in block.models if 'synthetic' not in m]
+            if not real_models:
+                # syntheticのみ
                 bar_char = self.BAR_CHARS['synthetic']
-                color = self._get_model_color(block.models[0])
-            elif 'sonnet' in block.models[0]:
-                bar_char = self.BAR_CHARS['sonnet']
-                color = self._get_model_color(block.models[0])
-            elif 'haiku' in block.models[0]:
-                bar_char = self.BAR_CHARS['haiku']
-                color = self._get_model_color(block.models[0])
-            elif 'opus' in block.models[0]:
-                bar_char = self.BAR_CHARS['opus']
-                color = self._get_model_color(block.models[0])
+                color = self.COLORS['GRAY']
             else:
-                bar_char = self.BAR_CHARS['unknown']
-                color = self._get_model_color(block.models[0])
+                # 優先度順に主要モデルを決定 (opus > sonnet > haiku)
+                primary = real_models[0]
+                for m in real_models:
+                    if 'opus' in m:
+                        primary = m
+                        break
+                    elif 'sonnet' in m and 'opus' not in primary:
+                        primary = m
+
+                if len(real_models) > 1:
+                    # 複数実モデル混在: ▒ + 主要モデルの色
+                    bar_char = self.BAR_CHARS['mixed']
+                elif 'opus' in primary:
+                    bar_char = self.BAR_CHARS['opus']
+                elif 'sonnet' in primary:
+                    bar_char = self.BAR_CHARS['sonnet']
+                elif 'haiku' in primary:
+                    bar_char = self.BAR_CHARS['haiku']
+                else:
+                    bar_char = self.BAR_CHARS['unknown']
+                color = self._get_model_color(primary)
 
             # タイムラインに配置
             timeline_list = list(timeline)
@@ -338,14 +402,20 @@ class ClaudeCodeViewer:
     def print_legend(self):
         """凡例を表示（色分け対応）"""
         print(f"{self.COLORS['BOLD']}凡例:{self.COLORS['ENDC']}")
-        print(f"  {self.COLORS['RED']}{self.BAR_CHARS['opus']}{self.COLORS['ENDC']} = Opus (赤系)")
-        print(f"    {self.COLORS['RED']}{self.BAR_CHARS['opus']}{self.COLORS['ENDC']} Opus-4.x")
+        print(f"  {self.COLORS['RED']}{self.BAR_CHARS['opus']}{self.COLORS['ENDC']} = Opus (赤/オレンジ系)")
+        print(f"    {self.COLORS['PINK']}{self.BAR_CHARS['opus']}{self.COLORS['ENDC']} Opus-4.7")
+        print(f"    {self.COLORS['BRIGHT_RED']}{self.BAR_CHARS['opus']}{self.COLORS['ENDC']} Opus-4.6")
+        print(f"    {self.COLORS['ORANGE']}{self.BAR_CHARS['opus']}{self.COLORS['ENDC']} Opus-4.5")
+        print(f"    {self.COLORS['RED']}{self.BAR_CHARS['opus']}{self.COLORS['ENDC']} Opus-4.1/4.0")
         print(f"    {self.COLORS['YELLOW']}{self.BAR_CHARS['opus']}{self.COLORS['ENDC']} Opus-3.x")
         print(f"  {self.COLORS['CYAN']}{self.BAR_CHARS['sonnet']}{self.COLORS['ENDC']} = Sonnet (青/シアン系)")
+        print(f"    {self.COLORS['BRIGHT_CYAN']}{self.BAR_CHARS['sonnet']}{self.COLORS['ENDC']} Sonnet-4.6")
         print(f"    {self.COLORS['CYAN']}{self.BAR_CHARS['sonnet']}{self.COLORS['ENDC']} Sonnet-4.5")
         print(f"    {self.COLORS['BLUE']}{self.BAR_CHARS['sonnet']}{self.COLORS['ENDC']} Sonnet-4.0")
         print(f"    {self.COLORS['MAGENTA']}{self.BAR_CHARS['sonnet']}{self.COLORS['ENDC']} Sonnet-3.5")
-        print(f"  {self.COLORS['GREEN']}{self.BAR_CHARS['haiku']}{self.COLORS['ENDC']} = Haiku (緑)")
+        print(f"  {self.COLORS['GREEN']}{self.BAR_CHARS['haiku']}{self.COLORS['ENDC']} = Haiku (緑系)")
+        print(f"    {self.COLORS['BRIGHT_GREEN']}{self.BAR_CHARS['haiku']}{self.COLORS['ENDC']} Haiku-4.5")
+        print(f"    {self.COLORS['GREEN']}{self.BAR_CHARS['haiku']}{self.COLORS['ENDC']} Haiku-4.x/3.x")
         print(f"  {self.COLORS['GRAY']}{self.BAR_CHARS['synthetic']}{self.COLORS['ENDC']} = Synthetic")
         print(f"  {self.COLORS['YELLOW']}{self.BAR_CHARS['mixed']}{self.COLORS['ENDC']} = 複数モデル使用")
 
@@ -369,6 +439,15 @@ class ClaudeCodeViewer:
         print(f"{self.COLORS['BOLD']}日付        曜日  ブロック  時間     "
               f"タイムライン (00:00 ━━━━━━━━━━━━━━━━━━━━━━━━ 24:00)  "
               f"トークン数        コスト{self.COLORS['ENDC']}")
+        # 時刻目盛り行
+        hour_ruler = list(' ' * 50)
+        for h in range(0, 25, 3):
+            pos = h * 2  # 1時間 = 2文字
+            label = str(h)
+            for j, c in enumerate(label):
+                if pos + j < 50:
+                    hour_ruler[pos + j] = c
+        print(f"{self.COLORS['GRAY']}{' ' * 38}{''.join(hour_ruler)}{self.COLORS['ENDC']}")
         print("─" * 100)
         
         # ソート処理
@@ -484,6 +563,146 @@ class ClaudeCodeViewer:
         
         print("─" * 60)
 
+    def get_weekly_usage(self, reset_weekday: int = 1, reset_hour: int = 20):
+        """週間使用量を計算（リセット：火曜20:00）
+
+        Args:
+            reset_weekday: リセット曜日 (0=月, 1=火, ..., 6=日)
+            reset_hour: リセット時刻（時）
+        """
+        now = datetime.datetime.now()
+
+        # 前回のリセット時刻を計算
+        days_since_reset = (now.weekday() - reset_weekday) % 7
+        if days_since_reset == 0 and now.hour < reset_hour:
+            days_since_reset = 7
+
+        last_reset = now.replace(hour=reset_hour, minute=0, second=0, microsecond=0)
+        last_reset -= datetime.timedelta(days=days_since_reset)
+
+        # 次回のリセット時刻を計算
+        next_reset = last_reset + datetime.timedelta(days=7)
+
+        # 週間の使用量を集計
+        weekly_stats = {
+            'all_models': {'tokens': 0, 'cost': 0, 'entries': 0},
+            'sonnet_only': {'tokens': 0, 'cost': 0, 'entries': 0},
+            'by_model': {}
+        }
+
+        for block in self.blocks:
+            # ブロックの開始時刻を解析
+            block_date_str, block_time_str = block.start_time.split(' ')
+            block_datetime = datetime.datetime.strptime(
+                f"{block_date_str} {block_time_str}", '%Y-%m-%d %H:%M'
+            )
+
+            # 週間内のブロックのみ集計
+            if last_reset <= block_datetime < next_reset:
+                weekly_stats['all_models']['tokens'] += block.total_tokens
+                weekly_stats['all_models']['cost'] += block.cost_usd
+                weekly_stats['all_models']['entries'] += block.entries
+
+                # モデル別集計
+                for model in block.models:
+                    if model not in weekly_stats['by_model']:
+                        weekly_stats['by_model'][model] = {'tokens': 0, 'cost': 0}
+                    weekly_stats['by_model'][model]['tokens'] += block.total_tokens // len(block.models)
+                    weekly_stats['by_model'][model]['cost'] += block.cost_usd / len(block.models)
+
+                    # Sonnetのみの集計
+                    if 'sonnet' in model.lower():
+                        weekly_stats['sonnet_only']['tokens'] += block.total_tokens
+                        weekly_stats['sonnet_only']['cost'] += block.cost_usd
+                        weekly_stats['sonnet_only']['entries'] += block.entries
+
+        # リセットまでの残り時間
+        time_to_reset = next_reset - now
+        hours_to_reset = int(time_to_reset.total_seconds() // 3600)
+        minutes_to_reset = int((time_to_reset.total_seconds() % 3600) // 60)
+
+        return {
+            'last_reset': last_reset,
+            'next_reset': next_reset,
+            'time_to_reset': f"{hours_to_reset}h{minutes_to_reset}m",
+            'next_reset_str': next_reset.strftime('%m/%d (%a) %H:%M'),
+            'stats': weekly_stats
+        }
+
+    def print_limits(self):
+        """使用制限情報を表示"""
+        session_info = self.get_current_session_info()
+        weekly_info = self.get_weekly_usage()
+
+        # ヘッダー
+        print(f"\n{self.COLORS['BOLD']}{self.COLORS['CYAN']}{'━'*50}{self.COLORS['ENDC']}")
+        print(f"{self.COLORS['BOLD']}使用制限状況{self.COLORS['ENDC']}")
+        print(f"{self.COLORS['BOLD']}{self.COLORS['CYAN']}{'━'*50}{self.COLORS['ENDC']}")
+
+        # セッション制限（5時間ブロック）
+        print(f"\n{self.COLORS['BOLD']}セッション制限 (5時間ブロック){self.COLORS['ENDC']}")
+
+        # 使用率に応じた色
+        if session_info['usage_percent'] >= 80:
+            usage_color = self.COLORS['RED']
+        elif session_info['usage_percent'] >= 50:
+            usage_color = self.COLORS['YELLOW']
+        else:
+            usage_color = self.COLORS['GREEN']
+
+        # プログレスバー
+        bar_width = 30
+        filled = int(session_info['usage_percent'] / 100 * bar_width)
+        bar = '█' * filled + '░' * (bar_width - filled)
+
+        print(f"  {self.COLORS['GRAY']}時間枠: {session_info['current_hour_block']}{self.COLORS['ENDC']}")
+        print(f"  使用: {self._format_number(session_info['total_tokens']):>12} / {self._format_number(session_info['max_tokens'])} tokens")
+        print(f"  {usage_color}[{bar}] {session_info['usage_percent']:>5.1f}%{self.COLORS['ENDC']}")
+        print(f"  コスト: {self.COLORS['YELLOW']}${session_info['total_cost']:.2f}{self.COLORS['ENDC']}")
+        print(f"  リセット: {self.COLORS['CYAN']}{session_info['reset_time']}{self.COLORS['ENDC']} ({session_info['time_remaining']}後)")
+
+        # 予測値がある場合
+        if session_info['is_active'] and session_info['projected_tokens'] != session_info['total_tokens']:
+            if session_info['projected_percent'] >= 80:
+                proj_color = self.COLORS['RED']
+            elif session_info['projected_percent'] >= 50:
+                proj_color = self.COLORS['YELLOW']
+            else:
+                proj_color = self.COLORS['GREEN']
+            print(f"  予測: {proj_color}{session_info['projected_percent']:.1f}%{self.COLORS['ENDC']} (${session_info['projected_cost']:.2f})")
+
+        # バーンレート
+        if session_info['burn_rate']:
+            print(f"  {self.COLORS['GRAY']}バーンレート: {session_info['burn_rate']['tokens_per_minute']:,.0f} tokens/分, ${session_info['burn_rate']['cost_per_hour']:.2f}/時間{self.COLORS['ENDC']}")
+
+        # 週間制限
+        print(f"\n{self.COLORS['BOLD']}週間制限{self.COLORS['ENDC']}")
+        weekly_stats = weekly_info['stats']
+
+        print(f"  {self.COLORS['GRAY']}リセット: {weekly_info['next_reset_str']}{self.COLORS['ENDC']} ({weekly_info['time_to_reset']}後)")
+
+        # All models
+        print(f"\n  {self.COLORS['BOLD']}All models:{self.COLORS['ENDC']}")
+        print(f"    トークン: {self._format_number(weekly_stats['all_models']['tokens']):>15}")
+        print(f"    コスト: {self.COLORS['YELLOW']}${weekly_stats['all_models']['cost']:>10.2f}{self.COLORS['ENDC']}")
+
+        # Sonnet only
+        print(f"\n  {self.COLORS['BOLD']}Sonnet only:{self.COLORS['ENDC']}")
+        if weekly_stats['sonnet_only']['tokens'] > 0:
+            print(f"    トークン: {self._format_number(weekly_stats['sonnet_only']['tokens']):>15}")
+            print(f"    コスト: {self.COLORS['CYAN']}${weekly_stats['sonnet_only']['cost']:>10.2f}{self.COLORS['ENDC']}")
+        else:
+            print(f"    {self.COLORS['GRAY']}まだSonnetを使用していません{self.COLORS['ENDC']}")
+
+        # モデル別内訳
+        if weekly_stats['by_model']:
+            print(f"\n  {self.COLORS['BOLD']}モデル別内訳:{self.COLORS['ENDC']}")
+            for model, stats in sorted(weekly_stats['by_model'].items(), key=lambda x: x[1]['cost'], reverse=True):
+                model_color = self._get_model_color(model)
+                print(f"    {model_color}{model:<20}{self.COLORS['ENDC']} ${stats['cost']:>8.2f}")
+
+        print(f"\n{self.COLORS['BOLD']}{self.COLORS['CYAN']}{'━'*50}{self.COLORS['ENDC']}\n")
+
     def get_current_session_info(self):
         """現在のセッション情報を取得"""
         # Max $200プランの制限値（推測値）
@@ -561,7 +780,7 @@ class ClaudeCodeViewer:
                 'time_remaining': f"{hours_remaining}h{minutes_remaining}m",
                 'entries': active_block.entries,
                 'is_active': True,
-                'current_hour_block': f"{block_start_hour:02d}:00-{block_end_hour:02d}:00",
+                'current_hour_block': f"{block_start_hour:02d}:00-{block_end_hour % 24:02d}:00",
                 'burn_rate': burn_rate
             }
         else:
@@ -611,7 +830,7 @@ class ClaudeCodeViewer:
                 'time_remaining': f"{hours_remaining}h{minutes_remaining}m",
                 'entries': total_entries,
                 'is_active': False,
-                'current_hour_block': f"{block_start_hour:02d}:00-{block_end_hour:02d}:00",
+                'current_hour_block': f"{block_start_hour:02d}:00-{block_end_hour % 24:02d}:00",
                 'burn_rate': None
             }
 
@@ -712,7 +931,9 @@ def main():
                        help='表示する日数を制限（デフォルト: ソート時10日）')
     parser.add_argument('--current', action='store_true',
                        help='現在のセッション情報を1行で表示')
-    
+    parser.add_argument('--limits', action='store_true',
+                       help='使用制限情報を表示（セッション制限・週間制限）')
+
     args = parser.parse_args()
     
     # JSONデータの読み込み
@@ -741,7 +962,12 @@ def main():
     if args.current:
         viewer.print_current_session_line()
         return
-    
+
+    # 使用制限情報を表示
+    if args.limits:
+        viewer.print_limits()
+        return
+
     # 特定日の詳細表示
     if args.date:
         viewer.print_daily_detail(args.date)
