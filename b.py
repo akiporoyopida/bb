@@ -53,7 +53,7 @@ class ClaudeCodeViewer:
                                                 'RED', 'ENDC', 'BOLD', 'UNDERLINE',
                                                 'CYAN', 'WHITE', 'GRAY', 'MAGENTA',
                                                 'ORANGE', 'BRIGHT_GREEN', 'BRIGHT_RED',
-                                                'PINK', 'BRIGHT_CYAN']}
+                                                'PINK', 'BRIGHT_CYAN', 'DEEP_PINK']}
         else:
             self.COLORS = {
                 'HEADER': '\033[95m',
@@ -73,6 +73,7 @@ class ClaudeCodeViewer:
                 'BRIGHT_GREEN': '\033[38;5;118m', # Haiku 4.5用
                 'PINK': '\033[38;5;201m',        # Opus 4.7用
                 'BRIGHT_CYAN': '\033[38;5;51m',  # Sonnet 4.6用
+                'DEEP_PINK': '\033[38;5;199m',   # Opus 4.8用
             }
         
         # アスキーアートバー文字
@@ -262,6 +263,8 @@ class ClaudeCodeViewer:
             return self.COLORS['MAGENTA']
         elif 'sonnet' in model:
             return self.COLORS['BLUE']
+        elif 'opus-4.8' in model:
+            return self.COLORS['DEEP_PINK']
         elif 'opus-4.7' in model:
             return self.COLORS['PINK']
         elif 'opus-4.6' in model:
@@ -403,6 +406,7 @@ class ClaudeCodeViewer:
         """凡例を表示（色分け対応）"""
         print(f"{self.COLORS['BOLD']}凡例:{self.COLORS['ENDC']}")
         print(f"  {self.COLORS['RED']}{self.BAR_CHARS['opus']}{self.COLORS['ENDC']} = Opus (赤/オレンジ系)")
+        print(f"    {self.COLORS['DEEP_PINK']}{self.BAR_CHARS['opus']}{self.COLORS['ENDC']} Opus-4.8")
         print(f"    {self.COLORS['PINK']}{self.BAR_CHARS['opus']}{self.COLORS['ENDC']} Opus-4.7")
         print(f"    {self.COLORS['BRIGHT_RED']}{self.BAR_CHARS['opus']}{self.COLORS['ENDC']} Opus-4.6")
         print(f"    {self.COLORS['ORANGE']}{self.BAR_CHARS['opus']}{self.COLORS['ENDC']} Opus-4.5")
