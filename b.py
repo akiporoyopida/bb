@@ -53,7 +53,9 @@ class ClaudeCodeViewer:
                                                 'RED', 'ENDC', 'BOLD', 'UNDERLINE',
                                                 'CYAN', 'WHITE', 'GRAY', 'MAGENTA',
                                                 'ORANGE', 'BRIGHT_GREEN', 'BRIGHT_RED',
-                                                'PINK', 'BRIGHT_CYAN', 'DEEP_PINK']}
+                                                'PINK', 'BRIGHT_CYAN', 'PURPLE',
+                                                'BRIGHT_WHITE', 'BRIGHT_YELLOW',
+                                                'AZURE', 'DARK_YELLOW']}
         else:
             self.COLORS = {
                 'HEADER': '\033[95m',
@@ -70,14 +72,19 @@ class ClaudeCodeViewer:
                 'MAGENTA': '\033[95m',
                 'ORANGE': '\033[38;5;208m',      # Opus 4.5用
                 'BRIGHT_RED': '\033[38;5;196m',  # Opus 4.6用
-                'BRIGHT_GREEN': '\033[38;5;118m', # Haiku 4.5用
-                'PINK': '\033[38;5;201m',        # Opus 4.7用
+                'BRIGHT_GREEN': '\033[38;5;46m',  # Haiku 4.5用（純緑: 黄色系と区別）
+                'PINK': '\033[38;5;205m',        # Opus 4.7用（ローズピンク: 赤と区別）
                 'BRIGHT_CYAN': '\033[38;5;51m',  # Sonnet 4.6用
-                'DEEP_PINK': '\033[38;5;199m',   # Opus 4.8用
+                'PURPLE': '\033[38;5;135m',      # Opus 4.8用（紫: 赤系と区別）
+                'BRIGHT_WHITE': '\033[1;97m',    # Fable 5用（太字の白: 他の全色と明確に区別）
+                'BRIGHT_YELLOW': '\033[38;5;226m', # Opus 5用（黄: 橙・赤系と明確に区別）
+                'AZURE': '\033[38;5;33m',        # Sonnet 5用（青: シアン系と明確に区別）
+                'DARK_YELLOW': '\033[38;5;136m', # Opus 3.x用（暗い黄土色: Opus 5の黄と区別）
             }
         
         # アスキーアートバー文字
         self.BAR_CHARS = {
+            'fable': '█',
             'opus': '█',
             'sonnet': '▓',
             'haiku': '▪',
@@ -99,7 +106,7 @@ class ClaudeCodeViewer:
             return 'synthetic'
 
         # モデルファミリーを検出 (sonnet, opus, haiku など)
-        families = ['sonnet', 'opus', 'haiku']
+        families = ['fable', 'sonnet', 'opus', 'haiku']
         detected_family = None
         for family in families:
             if family in model_lower:
@@ -253,7 +260,11 @@ class ClaudeCodeViewer:
 
     def _get_model_color(self, model: str) -> str:
         """モデルに応じた色コードを取得"""
-        if 'sonnet-4.6' in model:
+        if 'fable' in model:
+            return self.COLORS['BRIGHT_WHITE']
+        elif 'sonnet-5' in model:
+            return self.COLORS['AZURE']
+        elif 'sonnet-4.6' in model:
             return self.COLORS['BRIGHT_CYAN']
         elif 'sonnet-4.5' in model:
             return self.COLORS['CYAN']
@@ -263,8 +274,10 @@ class ClaudeCodeViewer:
             return self.COLORS['MAGENTA']
         elif 'sonnet' in model:
             return self.COLORS['BLUE']
+        elif 'opus-5' in model:
+            return self.COLORS['BRIGHT_YELLOW']
         elif 'opus-4.8' in model:
-            return self.COLORS['DEEP_PINK']
+            return self.COLORS['PURPLE']
         elif 'opus-4.7' in model:
             return self.COLORS['PINK']
         elif 'opus-4.6' in model:
@@ -276,7 +289,7 @@ class ClaudeCodeViewer:
         elif 'opus-4' in model:
             return self.COLORS['RED']
         elif 'opus-3' in model:
-            return self.COLORS['YELLOW']
+            return self.COLORS['DARK_YELLOW']
         elif 'opus' in model:
             return self.COLORS['RED']
         elif 'haiku-4.5' in model:
@@ -315,18 +328,22 @@ class ClaudeCodeViewer:
                 bar_char = self.BAR_CHARS['synthetic']
                 color = self.COLORS['GRAY']
             else:
-                # 優先度順に主要モデルを決定 (opus > sonnet > haiku)
+                # 優先度順に主要モデルを決定 (fable > opus > sonnet > haiku)
                 primary = real_models[0]
                 for m in real_models:
-                    if 'opus' in m:
+                    if 'fable' in m:
                         primary = m
                         break
-                    elif 'sonnet' in m and 'opus' not in primary:
+                    elif 'opus' in m and 'fable' not in primary:
+                        primary = m
+                    elif 'sonnet' in m and 'opus' not in primary and 'fable' not in primary:
                         primary = m
 
                 if len(real_models) > 1:
                     # 複数実モデル混在: ▒ + 主要モデルの色
                     bar_char = self.BAR_CHARS['mixed']
+                elif 'fable' in primary:
+                    bar_char = self.BAR_CHARS['fable']
                 elif 'opus' in primary:
                     bar_char = self.BAR_CHARS['opus']
                 elif 'sonnet' in primary:
@@ -405,14 +422,18 @@ class ClaudeCodeViewer:
     def print_legend(self):
         """凡例を表示（色分け対応）"""
         print(f"{self.COLORS['BOLD']}凡例:{self.COLORS['ENDC']}")
+        print(f"  {self.COLORS['BRIGHT_WHITE']}{self.BAR_CHARS['fable']}{self.COLORS['ENDC']} = Fable (白)")
+        print(f"    {self.COLORS['BRIGHT_WHITE']}{self.BAR_CHARS['fable']}{self.COLORS['ENDC']} Fable-5")
         print(f"  {self.COLORS['RED']}{self.BAR_CHARS['opus']}{self.COLORS['ENDC']} = Opus (赤/オレンジ系)")
-        print(f"    {self.COLORS['DEEP_PINK']}{self.BAR_CHARS['opus']}{self.COLORS['ENDC']} Opus-4.8")
+        print(f"    {self.COLORS['BRIGHT_YELLOW']}{self.BAR_CHARS['opus']}{self.COLORS['ENDC']} Opus-5")
+        print(f"    {self.COLORS['PURPLE']}{self.BAR_CHARS['opus']}{self.COLORS['ENDC']} Opus-4.8")
         print(f"    {self.COLORS['PINK']}{self.BAR_CHARS['opus']}{self.COLORS['ENDC']} Opus-4.7")
         print(f"    {self.COLORS['BRIGHT_RED']}{self.BAR_CHARS['opus']}{self.COLORS['ENDC']} Opus-4.6")
         print(f"    {self.COLORS['ORANGE']}{self.BAR_CHARS['opus']}{self.COLORS['ENDC']} Opus-4.5")
         print(f"    {self.COLORS['RED']}{self.BAR_CHARS['opus']}{self.COLORS['ENDC']} Opus-4.1/4.0")
-        print(f"    {self.COLORS['YELLOW']}{self.BAR_CHARS['opus']}{self.COLORS['ENDC']} Opus-3.x")
+        print(f"    {self.COLORS['DARK_YELLOW']}{self.BAR_CHARS['opus']}{self.COLORS['ENDC']} Opus-3.x")
         print(f"  {self.COLORS['CYAN']}{self.BAR_CHARS['sonnet']}{self.COLORS['ENDC']} = Sonnet (青/シアン系)")
+        print(f"    {self.COLORS['AZURE']}{self.BAR_CHARS['sonnet']}{self.COLORS['ENDC']} Sonnet-5")
         print(f"    {self.COLORS['BRIGHT_CYAN']}{self.BAR_CHARS['sonnet']}{self.COLORS['ENDC']} Sonnet-4.6")
         print(f"    {self.COLORS['CYAN']}{self.BAR_CHARS['sonnet']}{self.COLORS['ENDC']} Sonnet-4.5")
         print(f"    {self.COLORS['BLUE']}{self.BAR_CHARS['sonnet']}{self.COLORS['ENDC']} Sonnet-4.0")
