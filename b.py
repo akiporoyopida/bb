@@ -51,11 +51,7 @@ class ClaudeCodeViewer:
         if no_color:
             self.COLORS = {key: '' for key in ['HEADER', 'BLUE', 'GREEN', 'YELLOW',
                                                 'RED', 'ENDC', 'BOLD', 'UNDERLINE',
-                                                'CYAN', 'WHITE', 'GRAY', 'MAGENTA',
-                                                'ORANGE', 'BRIGHT_GREEN', 'BRIGHT_RED',
-                                                'PINK', 'BRIGHT_CYAN', 'PURPLE',
-                                                'BRIGHT_WHITE', 'BRIGHT_YELLOW',
-                                                'AZURE', 'DARK_YELLOW']}
+                                                'CYAN', 'WHITE', 'GRAY', 'MAGENTA']}
         else:
             self.COLORS = {
                 'HEADER': '\033[95m',
@@ -70,18 +66,40 @@ class ClaudeCodeViewer:
                 'WHITE': '\033[97m',
                 'GRAY': '\033[90m',
                 'MAGENTA': '\033[95m',
-                'ORANGE': '\033[38;5;208m',      # Opus 4.5用
-                'BRIGHT_RED': '\033[38;5;196m',  # Opus 4.6用
-                'BRIGHT_GREEN': '\033[38;5;46m',  # Haiku 4.5用（純緑: 黄色系と区別）
-                'PINK': '\033[38;5;205m',        # Opus 4.7用（ローズピンク: 赤と区別）
-                'BRIGHT_CYAN': '\033[38;5;51m',  # Sonnet 4.6用
-                'PURPLE': '\033[38;5;135m',      # Opus 4.8用（紫: 赤系と区別）
-                'BRIGHT_WHITE': '\033[1;97m',    # Fable 5用（太字の白: 他の全色と明確に区別）
-                'BRIGHT_YELLOW': '\033[38;5;226m', # Opus 5用（黄: 橙・赤系と明確に区別）
-                'AZURE': '\033[38;5;33m',        # Sonnet 5用（青: シアン系と明確に区別）
-                'DARK_YELLOW': '\033[38;5;136m', # Opus 3.x用（暗い黄土色: Opus 5の黄と区別）
             }
-        
+
+        # モデルバージョン別の色（凡例はこの順＝新しい順に表示）
+        # キーは簡略化モデル名。'opus-3' のようなメジャーのみのキーは 3.x 全体に適用
+        # 現行モデルは知覚色差 CIEDE2000 で互いに ΔE≥23 になるよう選定
+        # 既存ファミリーの新バージョンはここに1行足すだけでよい（色判定・凡例・--no-color に反映される）
+        self.MODEL_COLORS = {
+            'fable-5.1':  ('\033[38;5;36m',  '青緑'),
+            'fable-5.0':  ('\033[1;97m',     '白'),
+            'opus-5.5':   ('\033[38;5;219m', '薄ピンク'),
+            'opus-5.0':   ('\033[38;5;226m', '黄'),
+            'opus-4.8':   ('\033[38;5;135m', '紫'),
+            'opus-4.7':   ('\033[38;5;204m', 'ローズ'),
+            'opus-4.6':   ('\033[38;5;196m', '赤'),
+            'opus-4.5':   ('\033[38;5;208m', '橙'),
+            'opus-4.1':   ('\033[91m',       '赤'),
+            'opus-4.0':   ('\033[91m',       '赤'),
+            'opus-3':     ('\033[38;5;136m', '黄土'),
+            'sonnet-5.0': ('\033[38;5;33m',  '青'),
+            'sonnet-4.6': ('\033[38;5;51m',  'シアン'),
+            'sonnet-4.5': ('\033[38;5;64m',  'オリーブ'),
+            'sonnet-4.0': ('\033[94m',       '青'),
+            'sonnet-3.5': ('\033[95m',       'マゼンタ'),
+            'haiku-4.5':  ('\033[38;5;46m',  '緑'),
+            'haiku-3':    ('\033[92m',       '緑'),
+        }
+        # 表にないバージョン（将来の新モデルなど）はファミリーの既定色
+        self.FAMILY_COLORS = {
+            'fable': '\033[1;97m',
+            'opus': '\033[91m',
+            'sonnet': '\033[94m',
+            'haiku': '\033[92m',
+        }
+
         # アスキーアートバー文字
         self.BAR_CHARS = {
             'fable': '█',
@@ -120,20 +138,29 @@ class ClaudeCodeViewer:
 
         # バージョン番号を抽出 (例: 4-5, 4.5, 3-5, 3.5)
         # パターン: family-X-Y または family-X.Y
-        version_pattern = rf'{detected_family}[-_]?(\d+)[-._](\d+)'
+        # 数字は1〜2桁に限定し、日付サフィックス（-20250514 など）をバージョンと誤認しない
+        version_pattern = rf'{detected_family}[-_]?(\d{{1,2}})[-._](\d{{1,2}})(?!\d)'
         match = re.search(version_pattern, model_lower)
 
         if match:
             major, minor = match.groups()
             return f'{detected_family}-{major}.{minor}'
 
-        # バージョンが見つからない場合は単一数字を探す (例: opus-4)
-        single_version_pattern = rf'{detected_family}[-_]?(\d+)'
+        # バージョンが見つからない場合は単一数字を探す (例: opus-4, claude-opus-4-20250514)
+        single_version_pattern = rf'{detected_family}[-_]?(\d{{1,2}})(?!\d)'
         match = re.search(single_version_pattern, model_lower)
 
         if match:
             major = match.group(1)
             return f'{detected_family}-{major}.0'
+
+        # 旧形式の命名: バージョンがファミリー名の前 (例: claude-3-5-sonnet-20241022)
+        legacy_pattern = rf'(\d{{1,2}})(?:[-.](\d{{1,2}}))?[-_]{detected_family}'
+        match = re.search(legacy_pattern, model_lower)
+
+        if match:
+            major, minor = match.groups()
+            return f'{detected_family}-{major}.{minor or 0}'
 
         # バージョン情報がない場合はファミリー名のみ
         return detected_family
@@ -173,7 +200,7 @@ class ClaudeCodeViewer:
                 entries=block_data['entries'],
                 total_tokens=block_data['totalTokens'],
                 cost_usd=block_data['costUSD'],
-                models=list(set(models)),  # 重複を削除
+                models=sorted(set(models)),  # 重複を削除（順序を固定）
                 duration_minutes=duration_minutes
             )
             
@@ -259,51 +286,47 @@ class ClaudeCodeViewer:
         return f"{num:,}"
 
     def _get_model_color(self, model: str) -> str:
-        """モデルに応じた色コードを取得"""
-        if 'fable' in model:
-            return self.COLORS['BRIGHT_WHITE']
-        elif 'sonnet-5' in model:
-            return self.COLORS['AZURE']
-        elif 'sonnet-4.6' in model:
-            return self.COLORS['BRIGHT_CYAN']
-        elif 'sonnet-4.5' in model:
-            return self.COLORS['CYAN']
-        elif 'sonnet-4.0' in model:
-            return self.COLORS['BLUE']
-        elif 'sonnet-3.5' in model:
-            return self.COLORS['MAGENTA']
-        elif 'sonnet' in model:
-            return self.COLORS['BLUE']
-        elif 'opus-5' in model:
-            return self.COLORS['BRIGHT_YELLOW']
-        elif 'opus-4.8' in model:
-            return self.COLORS['PURPLE']
-        elif 'opus-4.7' in model:
-            return self.COLORS['PINK']
-        elif 'opus-4.6' in model:
-            return self.COLORS['BRIGHT_RED']
-        elif 'opus-4.5' in model:
-            return self.COLORS['ORANGE']
-        elif 'opus-4.1' in model:
-            return self.COLORS['RED']
-        elif 'opus-4' in model:
-            return self.COLORS['RED']
-        elif 'opus-3' in model:
-            return self.COLORS['DARK_YELLOW']
-        elif 'opus' in model:
-            return self.COLORS['RED']
-        elif 'haiku-4.5' in model:
-            return self.COLORS['BRIGHT_GREEN']
-        elif 'haiku-4' in model:
-            return self.COLORS['GREEN']
-        elif 'haiku-3' in model:
-            return self.COLORS['GREEN']
-        elif 'haiku' in model:
-            return self.COLORS['GREEN']
-        elif 'synthetic' in model:
+        """モデルに応じた色コードを取得（引数は簡略化済みのモデル名）"""
+        if self.no_color:
+            return ''
+        if model == 'synthetic':
             return self.COLORS['GRAY']
-        else:
-            return self.COLORS['WHITE']
+
+        # 完全一致 → メジャーのみ（例: opus-3.5 → opus-3）→ ファミリー既定色 の順
+        # （部分一致だと opus-5 が opus-5.5 を奪うなど判定順に依存するため使わない）
+        if model in self.MODEL_COLORS:
+            return self.MODEL_COLORS[model][0]
+        major_key = model.split('.')[0]
+        if major_key in self.MODEL_COLORS:
+            return self.MODEL_COLORS[major_key][0]
+        family = model.split('-')[0]
+        if family in self.FAMILY_COLORS:
+            return self.FAMILY_COLORS[family]
+        return self.COLORS['WHITE']
+
+    def _pick_primary_model(self, models: List[str]) -> str:
+        """主要モデルを決定（fable > opus > sonnet > haiku、同じファミリー内は新しいバージョン）
+        ブロック内のモデルの並び順に依存せず、常に同じ結果になる
+        """
+        rank = {'fable': 0, 'opus': 1, 'sonnet': 2, 'haiku': 3}
+
+        def sort_key(m):
+            family, _, version = m.partition('-')
+            nums = [int(x) for x in version.split('.') if x.isdigit()]
+            return (rank.get(family, len(rank)), not nums, [-n for n in nums], m)
+
+        return min(models, key=sort_key)
+
+    def _format_model_label(self, model: str) -> str:
+        """凡例用の表示名（例: opus-5.5 -> Opus-5.5, opus-5.0 -> Opus-5, opus-3 -> Opus-3.x）"""
+        family, _, version = model.partition('-')
+        if not version:
+            return family.capitalize()
+        if '.' not in version:
+            version += '.x'
+        elif version.endswith('.0'):
+            version = version[:-2]
+        return f"{family.capitalize()}-{version}"
 
     def _get_timeline_bar(self, blocks: List[Block], width: int = 48) -> str:
         """24時間のタイムラインバーを生成（色分け対応）"""
@@ -328,16 +351,7 @@ class ClaudeCodeViewer:
                 bar_char = self.BAR_CHARS['synthetic']
                 color = self.COLORS['GRAY']
             else:
-                # 優先度順に主要モデルを決定 (fable > opus > sonnet > haiku)
-                primary = real_models[0]
-                for m in real_models:
-                    if 'fable' in m:
-                        primary = m
-                        break
-                    elif 'opus' in m and 'fable' not in primary:
-                        primary = m
-                    elif 'sonnet' in m and 'opus' not in primary and 'fable' not in primary:
-                        primary = m
+                primary = self._pick_primary_model(real_models)
 
                 if len(real_models) > 1:
                     # 複数実モデル混在: ▒ + 主要モデルの色
@@ -422,25 +436,34 @@ class ClaudeCodeViewer:
     def print_legend(self):
         """凡例を表示（色分け対応）"""
         print(f"{self.COLORS['BOLD']}凡例:{self.COLORS['ENDC']}")
-        print(f"  {self.COLORS['BRIGHT_WHITE']}{self.BAR_CHARS['fable']}{self.COLORS['ENDC']} = Fable (白)")
-        print(f"    {self.COLORS['BRIGHT_WHITE']}{self.BAR_CHARS['fable']}{self.COLORS['ENDC']} Fable-5")
-        print(f"  {self.COLORS['RED']}{self.BAR_CHARS['opus']}{self.COLORS['ENDC']} = Opus (赤/オレンジ系)")
-        print(f"    {self.COLORS['BRIGHT_YELLOW']}{self.BAR_CHARS['opus']}{self.COLORS['ENDC']} Opus-5")
-        print(f"    {self.COLORS['PURPLE']}{self.BAR_CHARS['opus']}{self.COLORS['ENDC']} Opus-4.8")
-        print(f"    {self.COLORS['PINK']}{self.BAR_CHARS['opus']}{self.COLORS['ENDC']} Opus-4.7")
-        print(f"    {self.COLORS['BRIGHT_RED']}{self.BAR_CHARS['opus']}{self.COLORS['ENDC']} Opus-4.6")
-        print(f"    {self.COLORS['ORANGE']}{self.BAR_CHARS['opus']}{self.COLORS['ENDC']} Opus-4.5")
-        print(f"    {self.COLORS['RED']}{self.BAR_CHARS['opus']}{self.COLORS['ENDC']} Opus-4.1/4.0")
-        print(f"    {self.COLORS['DARK_YELLOW']}{self.BAR_CHARS['opus']}{self.COLORS['ENDC']} Opus-3.x")
-        print(f"  {self.COLORS['CYAN']}{self.BAR_CHARS['sonnet']}{self.COLORS['ENDC']} = Sonnet (青/シアン系)")
-        print(f"    {self.COLORS['AZURE']}{self.BAR_CHARS['sonnet']}{self.COLORS['ENDC']} Sonnet-5")
-        print(f"    {self.COLORS['BRIGHT_CYAN']}{self.BAR_CHARS['sonnet']}{self.COLORS['ENDC']} Sonnet-4.6")
-        print(f"    {self.COLORS['CYAN']}{self.BAR_CHARS['sonnet']}{self.COLORS['ENDC']} Sonnet-4.5")
-        print(f"    {self.COLORS['BLUE']}{self.BAR_CHARS['sonnet']}{self.COLORS['ENDC']} Sonnet-4.0")
-        print(f"    {self.COLORS['MAGENTA']}{self.BAR_CHARS['sonnet']}{self.COLORS['ENDC']} Sonnet-3.5")
-        print(f"  {self.COLORS['GREEN']}{self.BAR_CHARS['haiku']}{self.COLORS['ENDC']} = Haiku (緑系)")
-        print(f"    {self.COLORS['BRIGHT_GREEN']}{self.BAR_CHARS['haiku']}{self.COLORS['ENDC']} Haiku-4.5")
-        print(f"    {self.COLORS['GREEN']}{self.BAR_CHARS['haiku']}{self.COLORS['ENDC']} Haiku-4.x/3.x")
+
+        # データに含まれるモデルだけを表示（データが空なら登録済みの全モデル）
+        used = {m for block in self.blocks for m in block.models}
+        show_all = not any(m.split('-')[0] in self.FAMILY_COLORS for m in used)
+
+        for family in ['fable', 'opus', 'sonnet', 'haiku']:
+            char = self.BAR_CHARS[family]
+            used_versions = {m for m in used if m.split('-')[0] == family}
+            registered = [key for key in self.MODEL_COLORS if key.split('-')[0] == family]
+            entries = []
+            for key in registered:
+                matched = sorted(m for m in used_versions
+                                 if m == key or (m not in self.MODEL_COLORS and m.split('.')[0] == key))
+                if show_all or matched:
+                    entries.append((key, self.MODEL_COLORS[key][1]))
+                used_versions -= set(matched)
+            # 表にない新しいバージョンはファミリー既定色で表示（MODEL_COLORS への追加を促す）
+            for m in sorted(used_versions, reverse=True):
+                entries.append((m, '未登録: 既定色'))
+            if not entries:
+                continue
+
+            print(f"  {char} = {family.capitalize()}")
+            for key, color_name in entries:
+                color = self._get_model_color(key)
+                label = self._format_model_label(key)
+                print(f"    {color}{char}{self.COLORS['ENDC']} {label} ({color_name})")
+
         print(f"  {self.COLORS['GRAY']}{self.BAR_CHARS['synthetic']}{self.COLORS['ENDC']} = Synthetic")
         print(f"  {self.COLORS['YELLOW']}{self.BAR_CHARS['mixed']}{self.COLORS['ENDC']} = 複数モデル使用")
 
@@ -767,8 +790,9 @@ class ClaudeCodeViewer:
                 projected_tokens = total_tokens
                 projected_cost = total_cost
             
-            # 主要モデルを取得（バージョン情報をそのまま使用）
-            primary_model = active_block.models[0] if active_block.models else "N/A"
+            # 主要モデルを取得（タイムラインと同じ優先度で決定、syntheticは除く）
+            real_models = [m for m in active_block.models if m != 'synthetic']
+            primary_model = self._pick_primary_model(real_models) if real_models else "N/A"
             
             # 使用率を計算
             usage_percent = (total_tokens / MAX_TOKENS_5H * 100) if MAX_TOKENS_5H > 0 else 0
@@ -826,13 +850,19 @@ class ClaudeCodeViewer:
             total_cost = sum(b.cost_usd for b in current_block_sessions)
             total_entries = sum(b.entries for b in current_block_sessions)
             
-            # 主要モデルを取得
+            # 主要モデルを取得（最も多く使われたモデル。同数ならタイムラインと同じ優先度、syntheticは除く）
             model_counts = {}
             for block in current_block_sessions:
                 for model in block.models:
-                    model_counts[model] = model_counts.get(model, 0) + 1
-            
-            primary_model = max(model_counts.items(), key=lambda x: x[1])[0] if model_counts else "N/A"
+                    if model != 'synthetic':
+                        model_counts[model] = model_counts.get(model, 0) + 1
+
+            if model_counts:
+                top_count = max(model_counts.values())
+                primary_model = self._pick_primary_model(
+                    [m for m, c in model_counts.items() if c == top_count])
+            else:
+                primary_model = "N/A"
             
             # 使用率を計算
             usage_percent = (total_tokens / MAX_TOKENS_5H * 100) if MAX_TOKENS_5H > 0 else 0
