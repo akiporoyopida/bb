@@ -68,37 +68,26 @@ class ClaudeCodeViewer:
                 'MAGENTA': '\033[95m',
             }
 
-        # モデルバージョン別の色（凡例はこの順＝新しい順に表示）
-        # キーは簡略化モデル名。'opus-3' のようなメジャーのみのキーは 3.x 全体に適用
-        # 現行モデルは知覚色差 CIEDE2000 で互いに ΔE≥23 になるよう選定
-        # 既存ファミリーの新バージョンはここに1行足すだけでよい（色判定・凡例・--no-color に反映される）
+        # メジャーバージョン別の背景色（256色番号, 色名）。凡例はこの順＝新しい順に表示
+        # タイムラインでは背景色＝メジャーバージョン、その上に小数点以下の数字を重ねる
+        #   例: Opus 4.8 → 赤背景に「8」、Opus 5.5 → 黄土背景に「5」
+        # 現行モデルの背景色は知覚色差 CIEDE2000 で互いに ΔE≥34 になるよう選定
+        # 同じメジャーの新バージョン（例: Fable 5.2）は追加不要。新メジャー（例: Opus 6）だけ1行足す
         self.MODEL_COLORS = {
-            'fable-5.1':  ('\033[38;5;36m',  '青緑'),
-            'fable-5.0':  ('\033[1;97m',     '白'),
-            'opus-5.5':   ('\033[38;5;219m', '薄ピンク'),
-            'opus-5.0':   ('\033[38;5;226m', '黄'),
-            'opus-4.8':   ('\033[38;5;135m', '紫'),
-            'opus-4.7':   ('\033[38;5;204m', 'ローズ'),
-            'opus-4.6':   ('\033[38;5;196m', '赤'),
-            'opus-4.5':   ('\033[38;5;208m', '橙'),
-            'opus-4.1':   ('\033[91m',       '赤'),
-            'opus-4.0':   ('\033[91m',       '赤'),
-            'opus-3':     ('\033[38;5;136m', '黄土'),
-            'sonnet-5.0': ('\033[38;5;33m',  '青'),
-            'sonnet-4.6': ('\033[38;5;51m',  'シアン'),
-            'sonnet-4.5': ('\033[38;5;64m',  'オリーブ'),
-            'sonnet-4.0': ('\033[94m',       '青'),
-            'sonnet-3.5': ('\033[95m',       'マゼンタ'),
-            'haiku-4.5':  ('\033[38;5;46m',  '緑'),
-            'haiku-3':    ('\033[92m',       '緑'),
+            'fable-5':  (231, '白'),
+            'opus-5':   (136, '黄土'),
+            'opus-4':   (196, '赤'),
+            'opus-3':   (208, '橙'),
+            'sonnet-5': (27,  '青'),
+            'sonnet-4': (30,  '青緑'),
+            'sonnet-3': (141, '薄紫'),
+            'haiku-5':  (199, 'ピンク'),
+            'haiku-4':  (40,  '緑'),
+            'haiku-3':  (157, '薄緑'),
         }
-        # 表にないバージョン（将来の新モデルなど）はファミリーの既定色
-        self.FAMILY_COLORS = {
-            'fable': '\033[1;97m',
-            'opus': '\033[91m',
-            'sonnet': '\033[94m',
-            'haiku': '\033[92m',
-        }
+        # 表にないメジャーバージョン（将来の新モデル）の背景色
+        self.UNREGISTERED_BG = (244, '未登録: 灰')
+        self.FAMILIES = ['fable', 'opus', 'sonnet', 'haiku']
 
         # アスキーアートバー文字
         self.BAR_CHARS = {
@@ -285,24 +274,51 @@ class ClaudeCodeViewer:
         """数値をカンマ区切りで表示"""
         return f"{num:,}"
 
+    @staticmethod
+    def _xterm_rgb(n: int):
+        """256色番号 → RGB"""
+        if n < 16:
+            base = [(0, 0, 0), (128, 0, 0), (0, 128, 0), (128, 128, 0), (0, 0, 128), (128, 0, 128),
+                    (0, 128, 128), (192, 192, 192), (128, 128, 128), (255, 0, 0), (0, 255, 0),
+                    (255, 255, 0), (0, 0, 255), (255, 0, 255), (0, 255, 255), (255, 255, 255)]
+            return base[n]
+        if n >= 232:
+            v = 8 + 10 * (n - 232)
+            return (v, v, v)
+        n -= 16
+        levels = [0, 95, 135, 175, 215, 255]
+        return (levels[n // 36], levels[(n // 6) % 6], levels[n % 6])
+
+    def _model_bg(self, model: str):
+        """モデルの背景色（256色番号, 色名）。キーはメジャーバージョン（opus-4.8 → opus-4）"""
+        return self.MODEL_COLORS.get(model.split('.')[0], self.UNREGISTERED_BG)
+
     def _get_model_color(self, model: str) -> str:
-        """モデルに応じた色コードを取得（引数は簡略化済みのモデル名）"""
+        """モデルの表示スタイル（背景色＋読みやすい文字色）。引数は簡略化済みのモデル名"""
         if self.no_color:
             return ''
         if model == 'synthetic':
             return self.COLORS['GRAY']
+        if model.split('-')[0] not in self.FAMILIES:
+            return self.COLORS['WHITE']
+        bg = self._model_bg(model)[0]
+        # 背景とのコントラスト比（WCAG）が高い方の文字色（黒 or 白）で数字を重ねる
+        def lin(c):
+            c /= 255
+            return c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4
+        r, g, b = (lin(c) for c in self._xterm_rgb(bg))
+        lum = 0.2126 * r + 0.7152 * g + 0.0722 * b
+        fg = 16 if (lum + 0.05) / 0.05 >= 1.05 / (lum + 0.05) else 231
+        return f'\033[1;48;5;{bg};38;5;{fg}m'
 
-        # 完全一致 → メジャーのみ（例: opus-3.5 → opus-3）→ ファミリー既定色 の順
-        # （部分一致だと opus-5 が opus-5.5 を奪うなど判定順に依存するため使わない）
-        if model in self.MODEL_COLORS:
-            return self.MODEL_COLORS[model][0]
-        major_key = model.split('.')[0]
-        if major_key in self.MODEL_COLORS:
-            return self.MODEL_COLORS[major_key][0]
-        family = model.split('-')[0]
-        if family in self.FAMILY_COLORS:
-            return self.FAMILY_COLORS[family]
-        return self.COLORS['WHITE']
+    def _model_bar_char(self, model: str) -> str:
+        """タイムラインの文字＝小数点以下の数字（opus-4.8 → '8'、opus-5.0 → '0'）
+        小数点のない旧モデル（opus-3 など）はファミリーの記号
+        """
+        family, _, version = model.partition('-')
+        if '.' in version:
+            return version.split('.', 1)[1][0]
+        return self.BAR_CHARS.get(family, self.BAR_CHARS['unknown'])
 
     def _pick_primary_model(self, models: List[str]) -> str:
         """主要モデルを決定（fable > opus > sonnet > haiku、同じファミリー内は新しいバージョン）
@@ -354,16 +370,11 @@ class ClaudeCodeViewer:
                 primary = self._pick_primary_model(real_models)
 
                 if len(real_models) > 1:
-                    # 複数実モデル混在: ▒ + 主要モデルの色
+                    # 複数実モデル混在: ▒ + 主要モデルの背景色
                     bar_char = self.BAR_CHARS['mixed']
-                elif 'fable' in primary:
-                    bar_char = self.BAR_CHARS['fable']
-                elif 'opus' in primary:
-                    bar_char = self.BAR_CHARS['opus']
-                elif 'sonnet' in primary:
-                    bar_char = self.BAR_CHARS['sonnet']
-                elif 'haiku' in primary:
-                    bar_char = self.BAR_CHARS['haiku']
+                elif primary.split('-')[0] in self.FAMILIES:
+                    # 背景色＝メジャーバージョン、文字＝小数点以下の数字
+                    bar_char = self._model_bar_char(primary)
                 else:
                     bar_char = self.BAR_CHARS['unknown']
                 color = self._get_model_color(primary)
@@ -437,35 +448,31 @@ class ClaudeCodeViewer:
         """凡例を表示（色分け対応）"""
         print(f"{self.COLORS['BOLD']}凡例:{self.COLORS['ENDC']}")
 
-        # データに含まれるモデルだけを表示（データが空なら登録済みの全モデル）
-        used = {m for block in self.blocks for m in block.models}
-        show_all = not any(m.split('-')[0] in self.FAMILY_COLORS for m in used)
+        print("  背景色 = メジャーバージョン、数字 = 小数点以下（例: 赤背景の 8 = Opus-4.8）")
 
-        for family in ['fable', 'opus', 'sonnet', 'haiku']:
-            char = self.BAR_CHARS[family]
-            used_versions = {m for m in used if m.split('-')[0] == family}
-            registered = [key for key in self.MODEL_COLORS if key.split('-')[0] == family]
-            entries = []
-            for key in registered:
-                matched = sorted(m for m in used_versions
-                                 if m == key or (m not in self.MODEL_COLORS and m.split('.')[0] == key))
-                if show_all or matched:
-                    entries.append((key, self.MODEL_COLORS[key][1]))
-                used_versions -= set(matched)
-            # 表にない新しいバージョンはファミリー既定色で表示（MODEL_COLORS への追加を促す）
-            for m in sorted(used_versions, reverse=True):
-                entries.append((m, '未登録: 既定色'))
-            if not entries:
+        # データに含まれるモデルだけを表示（データが空なら登録済みのメジャーバージョン）
+        used = {m for block in self.blocks for m in block.models}
+        show_all = not any(m.split('-')[0] in self.FAMILIES for m in used)
+
+        for family in self.FAMILIES:
+            if show_all:
+                versions = [key for key in self.MODEL_COLORS if key.split('-')[0] == family]
+            else:
+                # 新しいバージョン順
+                versions = sorted((m for m in used if m.split('-')[0] == family),
+                                  key=lambda m: [-int(x) for x in m.partition('-')[2].split('.') if x.isdigit()])
+            if not versions:
                 continue
 
-            print(f"  {char} = {family.capitalize()}")
-            for key, color_name in entries:
-                color = self._get_model_color(key)
+            print(f"  {family.capitalize()}")
+            for key in versions:
+                style = self._get_model_color(key)
+                char = self._model_bar_char(key) if not show_all else ' '
                 label = self._format_model_label(key)
-                print(f"    {color}{char}{self.COLORS['ENDC']} {label} ({color_name})")
+                print(f"    {style}{char}{self.COLORS['ENDC']} {label} ({self._model_bg(key)[1]})")
 
         print(f"  {self.COLORS['GRAY']}{self.BAR_CHARS['synthetic']}{self.COLORS['ENDC']} = Synthetic")
-        print(f"  {self.COLORS['YELLOW']}{self.BAR_CHARS['mixed']}{self.COLORS['ENDC']} = 複数モデル使用")
+        print(f"  {self.COLORS['YELLOW']}{self.BAR_CHARS['mixed']}{self.COLORS['ENDC']} = 複数モデル使用（背景色は主要モデルのもの）")
 
         # 未知のモデルが存在する場合のみ表示
         if self.unknown_models:
@@ -746,8 +753,11 @@ class ClaudeCodeViewer:
         if weekly_stats['by_model']:
             print(f"\n  {self.COLORS['BOLD']}モデル別内訳:{self.COLORS['ENDC']}")
             for model, stats in sorted(weekly_stats['by_model'].items(), key=lambda x: x[1]['cost'], reverse=True):
-                model_color = self._get_model_color(model)
-                print(f"    {model_color}{model:<20}{self.COLORS['ENDC']} ${stats['cost']:>8.2f}")
+                if model.split('-')[0] in self.FAMILIES:
+                    swatch = f"{self._get_model_color(model)}{self._model_bar_char(model)}{self.COLORS['ENDC']} "
+                else:
+                    swatch = '  '
+                print(f"    {swatch}{model:<20} ${stats['cost']:>8.2f}")
 
         print(f"\n{self.COLORS['BOLD']}{self.COLORS['CYAN']}{'━'*50}{self.COLORS['ENDC']}\n")
 
